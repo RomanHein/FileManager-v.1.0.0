@@ -95,7 +95,10 @@ private:
 	 */
 	bool _saveToFile(const std::filesystem::path& filePath, SaveMode saveMode) {
 		if (!std::filesystem::exists(filePath)) {
-			std::filesystem::create_directories(filePath.parent_path());
+			if (filePath.has_parent_path()) {
+				std::filesystem::create_directories(filePath.parent_path());
+			}
+
 			saveMode = SaveMode::Rewrite;
 		}
 
