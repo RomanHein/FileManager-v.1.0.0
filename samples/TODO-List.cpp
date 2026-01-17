@@ -1,8 +1,12 @@
 #include <iostream>
 
-#include "../include/fmanager.h"
+#include "../include/filemanager.h"
 
 int main() {
-    fmanager file("todo.txt");
-    file.append("Hello World");
+    filemanager file("todo.txt");
+    file.overwrite(2, "New entry", " by overwriting", "!");
+
+    for (const auto& entry : file.all()) {
+        std::cout << entry << "\n";
+    }
 }

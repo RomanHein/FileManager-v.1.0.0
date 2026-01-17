@@ -1,17 +1,20 @@
 #ifndef FILEMANAGER_FILEMANAGER_H
 #define FILEMANAGER_FILEMANAGER_H
 
+#include <charconv>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
 #include <numeric>
+#include <optional>
 #include <utility>
 #include <vector>
 
 #define COMMAND_DELIMITER ';'
+#define ESTIMATED_CHARS_PER_ROW 64
 
-class fmanager {
+class filemanager {
     enum class Command : char {
         Append = 'A',
         Clear = 'C',
@@ -33,20 +36,25 @@ class fmanager {
         template <typename... Args>
         void record(const Command command, Args... args) {
             std::string entry;
-            entry += static_cast<char>(command) + COMMAND_DELIMITER;
+            entry.push_back(static_cast<char>(command));
+            entry.push_back(COMMAND_DELIMITER);
 
             if (sizeof...(Args) > 0) {
                 ((entry += tokenize(std::forward<Args>(args))), ...);
             }
 
             _pending_commands.emplace_back(std::move(entry));
+            _outdated = true;
         }
 
-        void replay(const std::function<void(const Command, const std::vector<std::string>&)>& callback) const {
+        template<typename F>
+        void replay(F&& callback) const {
             std::ifstream in(_journal_path);
             std::string line;
             std::vector<std::string> args;
             args.reserve(2);
+
+            if (!in.is_open()) throw std::runtime_error("couldnt open file");
 
             while (std::getline(in, line)) {
                 const auto command = static_cast<Command>(line[0]);
@@ -66,14 +74,12 @@ class fmanager {
             }
         }
 
-        [[nodiscard]] bool destroy() const {
-            std::error_code ec;
-            std::filesystem::remove(_journal_path, ec);
-            return ec ? false : true;
+        void destroy() const {
+            std::filesystem::remove(_journal_path);
         }
 
         void save() {
-            if (_pending_commands.empty()) return;
+            if (!_outdated) return;
 
             std::ofstream out(_journal_path, std::ios::app);
 
@@ -82,7 +88,7 @@ class fmanager {
             }
 
             out.close();
-            _pending_commands.clear();
+            _outdated = false;
         }
 
         [[nodiscard]] bool exists() const {
@@ -90,6 +96,12 @@ class fmanager {
         }
 
     private:
+        [[nodiscard]] static bool _is_numerical(const std::string& str) {
+            return std::find_if(str.begin(), str.end(), [](const char c) {
+                return !std::isdigit(c);
+            }) == str.end();
+        }
+
         static Token _extract_token(const std::string& line, size_t& offset) {
             const size_t delimiter = line.find(COMMAND_DELIMITER, offset);
 
@@ -98,14 +110,21 @@ class fmanager {
                 return {};
             }
 
-            const size_t length = std::stoull(line.substr(offset, delimiter - offset));
+            std::string data = line.substr(offset, delimiter - offset);
+
+            if (!_is_numerical(data)) {
+                offset = std::string::npos;
+                return {};
+            }
+
+            const size_t length = std::stoull(data);
 
             if (line.size() - delimiter - 1 <= length) {
                 offset = std::string::npos;
                 return {};
             }
 
-            std::string data = line.substr(delimiter + 1, length);
+            data = line.substr(delimiter + 1, length);
             const size_t new_offset = delimiter + 1 + length + 1;
             offset = new_offset < line.size() ? new_offset : std::string::npos;
 
@@ -131,13 +150,18 @@ class fmanager {
 
         const std::filesystem::path _journal_path;
         std::vector<std::string> _pending_commands;
+        bool _outdated = false;
     };
 
 public:
-    explicit fmanager(std::filesystem::path file_path) :
+    explicit filemanager(std::filesystem::path file_path) :
         _journal(file_path.parent_path() / (file_path.stem().string() + "_journal" + file_path.extension().string())),
         _root_path(std::move(file_path))
     {
+        if (std::filesystem::path tmp_path = _root_path ; std::filesystem::exists(tmp_path.replace_extension(".tmp"))) {
+            std::filesystem::remove(tmp_path);
+        }
+
         if (std::filesystem::exists(_root_path)) {
             _init_cache();
         }
@@ -150,12 +174,24 @@ public:
         }
     }
 
-    ~fmanager() {
+    ~filemanager() {
         try {
             _consolidate();
-        } catch (std::exception& e) {
+        }
+        catch (std::exception& e) {
             std::cerr << e.what() << std::endl;
         }
+    }
+
+    [[nodiscard]] std::vector<std::string> all() const {
+        std::vector<std::string> result;
+        result.reserve(_index_order.size());
+
+        for (const auto index : _index_order) {
+            result.emplace_back(_cache[index]);
+        }
+
+        return result;
     }
 
     template <typename... Args>
@@ -167,7 +203,11 @@ public:
         _journal.record(Command::Append, std::move(text));
     }
 
-    void overwrite(const size_t index, std::string text) {
+    template <typename... Args>
+    void overwrite(const size_t index, Args... args) {
+        std::string text;
+        (text.append(std::forward<Args>(args)), ...);
+
         _apply_overwrite(index, text);
         _journal.record(Command::Overwrite, index, std::move(text));
     }
@@ -192,6 +232,14 @@ private:
         std::string line;
         size_t index = 0;
 
+        if (!in.is_open()) throw std::runtime_error("could not open file");
+
+        if (const auto file_size = std::filesystem::file_size(_root_path); file_size > 0) {
+            const size_t estimated_rows = file_size / ESTIMATED_CHARS_PER_ROW + 1;
+            _cache.reserve(estimated_rows);
+            _index_order.reserve(estimated_rows);
+        }
+
         while (std::getline(in, line)) {
             _cache.emplace_back(std::move(line));
             _index_order.emplace_back(index);
@@ -206,6 +254,11 @@ private:
         write_path.replace_extension(".tmp");
         std::ofstream out(write_path, std::ios::trunc);
 
+        if (!out.is_open()) {
+            _journal.save();
+            return;
+        }
+
         for (const auto index : _index_order) {
             out << _cache[index] << "\n";
         }
@@ -214,11 +267,13 @@ private:
         std::error_code ec;
         std::filesystem::rename(write_path, _root_path, ec);
 
-        if (ec || !_journal.destroy()) {
+        if (ec) {
+            std::filesystem::remove(write_path, ec);
             _journal.save();
             return;
-        };
+        }
 
+        _journal.destroy();
         _needs_consolidation = false;
     }
 
@@ -284,7 +339,7 @@ private:
     }
 
     Journal _journal;
-    std::filesystem::path _root_path;
+    const std::filesystem::path _root_path;
     std::vector<std::string> _cache;
     std::vector<size_t> _index_order;
     bool _needs_consolidation = false;

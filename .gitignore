@@ -1,5 +1,5 @@
 *
 !*/
-!include/fmanager.h
+!include/filemanager.h
 !samples/TODO-List.cpp
 !README.md
