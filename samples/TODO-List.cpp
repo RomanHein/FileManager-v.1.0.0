@@ -3,8 +3,8 @@
 #include "../include/filemanager.h"
 
 int main() {
-    filemanager file("todo.txt");
-    file.overwrite(2, "New entry", " by overwriting", "!");
+    FileManager file("todo.txt");
+    file.erase(0);
 
     for (const auto& entry : file.all()) {
         std::cout << entry << "\n";
