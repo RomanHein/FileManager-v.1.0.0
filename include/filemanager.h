@@ -230,6 +230,34 @@ public:
     }
 
     /**
+     * @brief Returns a copy of the text at the specified index
+     * @param index Line you want to read
+     * @return Copy of the text at the given index
+     */
+    [[nodiscard]] std::string read(const size_t index) const {
+        if (index >= _index_order.size()) throw std::out_of_range("index out of range");
+        return _cache[_index_order[index]];
+    }
+
+    /**
+     * @brief Returns a copy of the first line of the file
+     * @return Copy of the first line
+     */
+    [[nodiscard]] std::string first() const {
+        if (_index_order.empty()) throw std::out_of_range("file is empty");
+        return _cache[_index_order.front()];
+    }
+
+    /**
+     * @brief Returns a copy of the last line of the file
+     * @return Copy of the last line
+     */
+    [[nodiscard]] std::string last() const {
+        if (_index_order.empty()) throw std::out_of_range("file is empty");
+        return _cache[_index_order.back()];
+    }
+
+    /**
      * @brief Copies every line of the file
      * @return Copy of every line
      */
@@ -295,6 +323,14 @@ public:
      */
     void save() {
         _journal.save();
+    }
+
+    [[nodiscard]] size_t size() const {
+        return _index_order.size();
+    }
+
+    [[nodiscard]] bool empty() const {
+        return _index_order.empty();
     }
 
 private:
